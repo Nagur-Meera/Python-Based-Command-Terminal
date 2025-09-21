@@ -1,0 +1,4 @@
+# Streamlit AI Terminal - Essential Dependencies Only
+streamlit>=1.28.0
+psutil>=5.9.0
+google-generativeai>=0.3.0
