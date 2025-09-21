@@ -27,6 +27,10 @@ st.set_page_config(
     }
 )
 
+# Suppress warnings
+import warnings
+warnings.filterwarnings('ignore')
+
 # Modern light theme CSS with enhanced responsiveness
 st.markdown("""
 <style>
@@ -528,19 +532,80 @@ if 'current_directory' not in st.session_state:
     st.session_state.current_directory = os.getcwd()
 if 'ai_enabled' not in st.session_state:
     st.session_state.ai_enabled = True
+if 'available_directories' not in st.session_state:
+    st.session_state.available_directories = []
 
 # Gemini API configuration
 GEMINI_API_KEY = "AIzaSyBM7VpSZ8MtAkX53h3KbDcAZtj_w0-U5i0"
 GEMINI_PROJECT_NUMBER = "866760035068"
 
+def get_available_directories(base_path=None):
+    """Get list of available directories for selection"""
+    if base_path is None:
+        base_path = os.getcwd()
+    
+    directories = []
+    
+    # Add common system directories
+    common_dirs = [
+        os.path.expanduser("~"),  # Home directory
+        os.path.expanduser("~/Desktop"),
+        os.path.expanduser("~/Documents"),
+        os.path.expanduser("~/Downloads"),
+        "C:\\" if os.name == 'nt' else "/",  # Root directory
+        base_path,  # Current directory
+    ]
+    
+    for dir_path in common_dirs:
+        if os.path.exists(dir_path) and os.path.isdir(dir_path):
+            directories.append(dir_path)
+    
+    # Add subdirectories of current directory
+    try:
+        for item in os.listdir(base_path):
+            item_path = os.path.join(base_path, item)
+            if os.path.isdir(item_path) and not item.startswith('.'):
+                directories.append(item_path)
+    except PermissionError:
+        pass
+    
+    # Remove duplicates and sort
+    directories = list(set(directories))
+    directories.sort()
+    
+    return directories
+
+def format_directory_name(dir_path):
+    """Format directory name for display"""
+    if dir_path == os.path.expanduser("~"):
+        return "🏠 Home Directory"
+    elif dir_path == os.path.expanduser("~/Desktop"):
+        return "🖥️ Desktop"
+    elif dir_path == os.path.expanduser("~/Documents"):
+        return "📄 Documents"
+    elif dir_path == os.path.expanduser("~/Downloads"):
+        return "📥 Downloads"
+    elif dir_path == "C:\\" or dir_path == "/":
+        return "💿 Root Directory"
+    else:
+        return f"📁 {os.path.basename(dir_path) or dir_path}"
+
 class SimpleTerminal:
     """Simplified terminal for Streamlit"""
     
     def __init__(self):
+        # Always use the session state directory
+        self.current_dir = st.session_state.current_directory
+    
+    def update_current_dir(self):
+        """Update current directory from session state"""
         self.current_dir = st.session_state.current_directory
     
     def execute_command(self, command: str) -> Dict:
         """Execute a command and return result"""
+        # Update current directory from session state
+        self.update_current_dir()
+        
         if not command.strip():
             return {"output": "", "error": "", "exit_code": 0}
         
@@ -557,11 +622,14 @@ class SimpleTerminal:
                     new_dir = parts[1]
                     if new_dir == '..':
                         new_dir = os.path.dirname(self.current_dir)
+                    elif new_dir == '~':
+                        new_dir = os.path.expanduser("~")
                     elif not os.path.isabs(new_dir):
                         new_dir = os.path.join(self.current_dir, new_dir)
                     
                     if os.path.exists(new_dir) and os.path.isdir(new_dir):
                         self.current_dir = os.path.abspath(new_dir)
+                        # Update session state
                         st.session_state.current_directory = self.current_dir
                         return {"output": f"Changed to {self.current_dir}", "error": "", "exit_code": 0}
                     else:
@@ -745,6 +813,98 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
+        # Directory Selection Section
+        st.markdown("### 📂 Directory Navigator")
+        
+        # Get available directories
+        available_dirs = get_available_directories(st.session_state.current_directory)
+        
+        # Directory selector
+        dir_options = {}
+        dir_display_names = []
+        
+        for dir_path in available_dirs:
+            display_name = format_directory_name(dir_path)
+            # Ensure unique display names
+            counter = 1
+            original_display = display_name
+            while display_name in dir_options:
+                display_name = f"{original_display} ({counter})"
+                counter += 1
+            
+            dir_options[display_name] = dir_path
+            dir_display_names.append(display_name)
+        
+        # Find current directory in options
+        current_display = None
+        current_abs_path = os.path.abspath(st.session_state.current_directory)
+        
+        for display_name, path in dir_options.items():
+            if os.path.abspath(path) == current_abs_path:
+                current_display = display_name
+                break
+        
+        # If current directory not in list, add it
+        if current_display is None:
+            current_display = f"📁 {os.path.basename(st.session_state.current_directory) or 'Current'}"
+            dir_options[current_display] = st.session_state.current_directory
+            dir_display_names.insert(0, current_display)
+        
+        # Directory selector with proper key
+        selected_dir_display = st.selectbox(
+            "Select Directory:",
+            options=dir_display_names,
+            index=dir_display_names.index(current_display),
+            key="directory_selector",
+            help="Choose a directory to navigate to"
+        )
+        
+        # Update current directory if selection changed
+        if selected_dir_display in dir_options:
+            new_dir = dir_options[selected_dir_display]
+            new_abs_path = os.path.abspath(new_dir)
+            
+            if new_abs_path != current_abs_path:
+                if os.path.exists(new_dir) and os.path.isdir(new_dir):
+                    st.session_state.current_directory = new_abs_path
+                    st.success(f"✅ Navigated to: {new_abs_path}")
+                    # Force refresh
+                    time.sleep(0.1)
+                    st.rerun()
+                else:
+                    st.error("❌ Directory no longer exists")
+        
+        # Manual directory input
+        with st.expander("🔧 Manual Path Entry"):
+            manual_path = st.text_input(
+                "Enter directory path:",
+                value="",
+                placeholder="e.g., /home/user or C:\\Users\\User",
+                key="manual_directory_input",
+                help="Type the full path to navigate to any directory"
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📍 Navigate", key="navigate_manual", use_container_width=True):
+                    if manual_path.strip():
+                        expanded_path = os.path.expanduser(manual_path.strip())
+                        if os.path.exists(expanded_path) and os.path.isdir(expanded_path):
+                            st.session_state.current_directory = os.path.abspath(expanded_path)
+                            st.success(f"✅ Navigated to: {expanded_path}")
+                            time.sleep(0.1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Directory not found or invalid path")
+                    else:
+                        st.warning("⚠️ Please enter a directory path")
+            
+            with col2:
+                if st.button("📋 Current", key="copy_current", use_container_width=True, help="Copy current directory path"):
+                    st.code(st.session_state.current_directory, language=None)
+        
+        st.markdown("---")
+        
         # AI Features Section
         st.markdown("### 🤖 AI Assistant")
         ai_enabled = st.checkbox("Enable Natural Language Processing", value=st.session_state.ai_enabled)
@@ -789,7 +949,9 @@ def main():
         
         with col2:
             if st.button("🏠 Home", help="Go to home directory", use_container_width=True):
-                st.session_state.rerun_command = "cd ~"
+                home_dir = os.path.expanduser("~")
+                st.session_state.current_directory = home_dir
+                st.rerun()
         
         # Additional actions
         if st.button("📊 System Info", help="Show system information", use_container_width=True):
@@ -797,6 +959,9 @@ def main():
         
         if st.button("📁 List Files", help="List current directory", use_container_width=True):
             st.session_state.rerun_command = "ls"
+        
+        if st.button("🔄 Refresh", help="Refresh directory list", use_container_width=True):
+            st.rerun()
     
     # Main terminal interface
     terminal = SimpleTerminal()
@@ -807,7 +972,7 @@ def main():
         <div class='directory-icon'>📁</div>
         <div>
             <div class='directory-label'>Current Directory</div>
-            <div class='directory-path'>{terminal.current_dir}</div>
+            <div class='directory-path'>{st.session_state.current_directory}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
